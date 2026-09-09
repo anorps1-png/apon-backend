@@ -61,6 +61,16 @@ export async function getSqliteDb(): Promise<Database> {
     );
   `);
 
+  // Curseur de Pull incrémental : un cursor (ISO datetime) par table, servant
+  // de filtre "updated_at > cursor" pour ne retélécharger que ce qui a changé
+  // depuis le dernier Pull (voir src/lib/localDbSync.ts).
+  dbInstance.run(`
+    CREATE TABLE IF NOT EXISTS sync_meta (
+      key TEXT PRIMARY KEY,
+      value TEXT
+    );
+  `);
+
   migrateLegacyJson(dbInstance);
   saveToDisk(dbInstance);
 
@@ -251,5 +261,23 @@ export async function addToQueue(item: { id: string; table: string; action: stri
 export async function removeFromQueue(taskId: string) {
   const db = await getSqliteDb();
   db.run(`DELETE FROM sync_queue WHERE id = ?`, [taskId]);
+  saveToDisk(db);
+}
+
+export async function getSyncMeta(key: string): Promise<string | null> {
+  const db = await getSqliteDb();
+  const stmt = db.prepare(`SELECT value FROM sync_meta WHERE key = ?`);
+  stmt.bind([key]);
+  let value: string | null = null;
+  if (stmt.step()) {
+    value = (stmt.getAsObject() as { value: string | null }).value;
+  }
+  stmt.free();
+  return value;
+}
+
+export async function setSyncMeta(key: string, value: string) {
+  const db = await getSqliteDb();
+  db.run(`INSERT OR REPLACE INTO sync_meta (key, value) VALUES (?, ?)`, [key, value]);
   saveToDisk(db);
 }

@@ -1,6 +1,6 @@
 {
   "name": "ecole-saas-cameroun",
-  "version": "1.1.5",
+  "version": "1.1.6",
   "private": true,
   "main": "main.js",
   "scripts": {
@@ -83,7 +83,8 @@
       {
         "provider": "github",
         "owner": "anorps1-png",
-        "repo": "MboaSchool"
+        "repo": "MboaSchool",
+        "releaseType": "release"
       }
     ],
     "win": {

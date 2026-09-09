@@ -5,7 +5,9 @@ import {
   deleteRecordsFromTable,
   getQueue,
   addToQueue,
-  removeFromQueue
+  removeFromQueue,
+  getSyncMeta,
+  setSyncMeta
 } from '@/lib/db/sqlite';
 import { callLocalAggregate } from '@/lib/db/localAggregates';
 
@@ -88,6 +90,14 @@ export async function GET(req: NextRequest) {
     if (action === 'get-queue') {
       const queue = await getQueue();
       return NextResponse.json({ queue, error: null });
+    }
+
+    // 1b. Get a Pull incrémental cursor (voir src/lib/localDbSync.ts)
+    if (action === 'get-sync-cursor') {
+      const key = searchParams.get('key');
+      if (!key) return NextResponse.json({ error: 'Missing key parameter' }, { status: 400 });
+      const value = await getSyncMeta(key);
+      return NextResponse.json({ value, error: null });
     }
 
     // 2. Select query
@@ -185,7 +195,7 @@ export async function POST(req: NextRequest) {
 
     // 2. Sync Pull from Remote Supabase to Local SQLite DB
     if (action === 'sync-pull-table') {
-      const { table: pullTable, records } = body;
+      const { table: pullTable, records, mode, deletedIds } = body;
       if (!pullTable || !Array.isArray(records)) {
         return NextResponse.json({ error: "Missing table or records array" }, { status: 400 });
       }
@@ -202,19 +212,34 @@ export async function POST(req: NextRequest) {
         await saveRecordsToTable(pullTable, recordsToUpsert);
       }
 
-      // Le Pull ramène systématiquement TOUTES les lignes visibles à distance
-      // (select('*') filtré par RLS, qui exclut déjà les soft-deletes) : toute
-      // ligne locale absente de ce jeu complet a donc été supprimée (ou
-      // soft-supprimée) à distance depuis le dernier Pull, et doit disparaître
-      // du miroir local — sans quoi elle y reste indéfiniment (le Pull ne
-      // faisait jusqu'ici qu'ajouter/mettre à jour, jamais supprimer). On ne
-      // touche jamais aux lignes encore en attente dans la file (pas encore
-      // poussées, donc normalement absentes du jeu distant).
-      const remoteIds = new Set(records.filter(r => r?.id).map(r => r.id));
-      const localRecords = await getAllRecordsFromTable(pullTable);
-      const idsToRemoveLocally = localRecords
-        .map((r: any) => r.id)
-        .filter((id: string) => id && !remoteIds.has(id) && !pendingIds.has(id));
+      let idsToRemoveLocally: string[] = [];
+
+      if (mode === 'incremental') {
+        // Pull incrémental (voir src/lib/localDbSync.ts) : `records` ne
+        // contient QUE les lignes modifiées depuis le dernier curseur, donc
+        // l'absence d'une ligne ici ne veut RIEN dire (elle n'a peut-être
+        // juste pas changé) — la reconciliation par absence ci-dessous serait
+        // catastrophique (elle effacerait tout le miroir local). Seules les
+        // suppressions explicitement remontées via la table deleted_records
+        // (deletedIds, fourni par l'appelant) doivent être retirées ici.
+        idsToRemoveLocally = Array.isArray(deletedIds)
+          ? deletedIds.filter((id: string) => id && !pendingIds.has(id))
+          : [];
+      } else {
+        // Pull complet : ramène systématiquement TOUTES les lignes visibles à
+        // distance (select('*') filtré par RLS, qui exclut déjà les
+        // soft-deletes) : toute ligne locale absente de ce jeu complet a donc
+        // été supprimée (ou soft-supprimée) à distance depuis le dernier
+        // Pull, et doit disparaître du miroir local. On ne touche jamais aux
+        // lignes encore en attente dans la file (pas encore poussées, donc
+        // normalement absentes du jeu distant).
+        const remoteIds = new Set(records.filter(r => r?.id).map(r => r.id));
+        const localRecords = await getAllRecordsFromTable(pullTable);
+        idsToRemoveLocally = localRecords
+          .map((r: any) => r.id)
+          .filter((id: string) => id && !remoteIds.has(id) && !pendingIds.has(id));
+      }
+
       if (idsToRemoveLocally.length > 0) {
         await deleteRecordsFromTable(pullTable, idsToRemoveLocally);
       }
@@ -225,6 +250,16 @@ export async function POST(req: NextRequest) {
         skipped: records.length - recordsToUpsert.length,
         removedLocally: idsToRemoveLocally.length
       });
+    }
+
+    // 2b. Set a Pull incrémental cursor (voir src/lib/localDbSync.ts)
+    if (action === 'set-sync-cursor') {
+      const { key, value } = body;
+      if (!key || typeof value !== 'string') {
+        return NextResponse.json({ error: 'Missing key or value' }, { status: 400 });
+      }
+      await setSyncMeta(key, value);
+      return NextResponse.json({ success: true });
     }
 
     // 3. RPC : équivalent local d'une fonction Postgres (finance, dashboard,

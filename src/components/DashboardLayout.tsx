@@ -86,6 +86,12 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
       const { pushLocalQueue } = await import('@/lib/localDbSync');
       const result = await pushLocalQueue();
 
+      if (result.sessionExpired) {
+        setSyncStatusMsg('Session expirée, reconnexion nécessaire...');
+        setTimeout(() => handleLogout('session-expiree'), 1500);
+        return;
+      }
+
       if (result.errors.length > 0) {
         setSyncStatusMsg(`${result.pushed} envoyé(s), ${result.failed} erreur(s).`);
         captureError(new Error('Push partiel'), { context: 'Manual push completed with errors', pushErrors: result.errors });
@@ -113,6 +119,13 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
     try {
       const { pullFromRemote } = await import('@/lib/localDbSync');
       const result = await pullFromRemote();
+
+      if (result.sessionExpired) {
+        setSyncStatusMsg('Session expirée, reconnexion nécessaire...');
+        setTimeout(() => handleLogout('session-expiree'), 1500);
+        return;
+      }
+
       const pulledTotal = Object.values(result.pulled).reduce((sum, n) => sum + n, 0);
 
       if (result.errors.length > 0) {
@@ -134,7 +147,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
     }
   };
 
-  const handleLogout = async () => {
+  const handleLogout = async (reason?: string) => {
     try {
       const { createClient } = await import('@/lib/supabase/client');
       const supabase = createClient();
@@ -173,7 +186,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
     }
 
     setEtablissementId(null);
-    window.location.href = '/login';
+    window.location.href = reason ? `/login?raison=${encodeURIComponent(reason)}` : '/login';
   };
 
   useEffect(() => {
@@ -624,7 +637,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
 
             {/* Déconnexion */}
             <button
-              onClick={handleLogout}
+              onClick={() => handleLogout()}
               title="Se déconnecter"
               className="p-2 text-ink-soft hover:text-accent hover:bg-chip rounded-full transition-colors"
             >

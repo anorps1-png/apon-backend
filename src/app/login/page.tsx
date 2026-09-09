@@ -57,6 +57,9 @@ function LoginContent() {
     if (isSignupUrl) {
       setIsSignUp(true);
     }
+    if (searchParams.get('raison') === 'session-expiree') {
+      setErrorMsg("Votre session en ligne a expiré, probablement suite à une coupure réseau. Reconnectez-vous pour continuer.");
+    }
   }, [searchParams]);
 
   const handleOfflineLogin = async () => {
